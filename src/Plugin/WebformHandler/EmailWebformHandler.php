@@ -101,10 +101,9 @@ class EmailWebformHandler extends WebformHandlerBase implements WebformHandlerMe
   /**
    * {@inheritdoc}
    */
-  public function __construct(array $configuration, $plugin_id, $plugin_definition, LoggerInterface $logger, EntityTypeManagerInterface $entity_type_manager, AccountInterface $current_user, ConfigFactoryInterface $config_factory, MailManagerInterface $mail_manager, WebformTokenManagerInterface $token_manager, WebformElementManagerInterface $element_manager) {
-    parent::__construct($configuration, $plugin_id, $plugin_definition, $logger, $entity_type_manager);
+  public function __construct(array $configuration, $plugin_id, $plugin_definition, LoggerInterface $logger, ConfigFactoryInterface $config_factory, EntityTypeManagerInterface $entity_type_manager, AccountInterface $current_user, MailManagerInterface $mail_manager, WebformTokenManagerInterface $token_manager, WebformElementManagerInterface $element_manager) {
+    parent::__construct($configuration, $plugin_id, $plugin_definition, $logger, $config_factory, $entity_type_manager);
     $this->currentUser = $current_user;
-    $this->configFactory = $config_factory;
     $this->mailManager = $mail_manager;
     $this->tokenManager = $token_manager;
     $this->elementManager = $element_manager;
@@ -119,9 +118,9 @@ class EmailWebformHandler extends WebformHandlerBase implements WebformHandlerMe
       $plugin_id,
       $plugin_definition,
       $container->get('logger.factory')->get('webform.email'),
+      $container->get('config.factory'),
       $container->get('entity_type.manager'),
       $container->get('current_user'),
-      $container->get('config.factory'),
       $container->get('plugin.manager.mail'),
       $container->get('webform.token_manager'),
       $container->get('plugin.manager.webform.element')
@@ -136,11 +135,11 @@ class EmailWebformHandler extends WebformHandlerBase implements WebformHandlerMe
     // Simplify the [webform_submission:values:.*] tokens.
     array_walk($settings, function (&$value, $key) {
       if (is_string($value)) {
-        $value = preg_replace('/\[webform_submission:(?:node|source_entity):([^:]+)[^]]*\]/', '[\1]', $value);
-        $value = preg_replace('/\[webform_submission:values:([^:]+)[^]]*\]/', '[\1]', $value);
-        $value = preg_replace('/\[webform_submission:([^:\]]+)[^]]*\]/', '[\1]', $value);
-        $value = preg_replace('/\[webform_role:([^:]+)\]/', '[\1]', $value);
         $value = preg_replace('/\[webform:([^:]+)\]/', '[\1]', $value);
+        $value = preg_replace('/\[webform_role:([^:]+)\]/', '[\1]', $value);
+        $value = preg_replace('/\[webform_submission:(?:node|source_entity|values):([^]]+)\]/', '[\1]', $value);
+        $value = preg_replace('/\[webform_submission:([^]]+)\]/', '[\1]', $value);
+        $value = preg_replace('/(:raw|:value)(:html)?\]/', ']', $value);
       }
     });
 
@@ -896,7 +895,7 @@ class EmailWebformHandler extends WebformHandlerBase implements WebformHandlerMe
     }
 
     // Preload HTML Editor and CodeMirror so that they can be properly
-    // initialized when loaded via AJAX.
+    // initialized when loaded via Ajax.
     $element['#attached']['library'][] = 'webform/webform.element.html_editor';
     $element['#attached']['library'][] = 'webform/webform.element.codemirror.text';
 
@@ -1140,7 +1139,7 @@ class EmailWebformHandler extends WebformHandlerBase implements WebformHandlerMe
       $element[$options_name] = [
         '#type' => 'webform_mapping',
         '#title' => $this->t('@title options', ['@title' => $title]),
-        '#description' => $this->t('The selected element has multiple options. You may enter e-mail addresses for each choice. When that choice is selected, an e-mail will be sent to the corresponding addresses. If a field is left blank, no e-mail will be sent for that option. You may use tokens.') . '<br/><br/>',
+        '#description' => $this->t('The selected element has multiple options. You may enter email addresses for each choice. When that choice is selected, an email will be sent to the corresponding addresses. If a field is left blank, no email will be sent for that option. You may use tokens.') . '<br/><br/>',
         '#description_display' => 'before',
         '#required' => TRUE,
         '#parents' => ['settings', $options_name],
@@ -1151,7 +1150,7 @@ class EmailWebformHandler extends WebformHandlerBase implements WebformHandlerMe
 
         '#destination__type' => 'webform_email_multiple',
         '#destination__allow_tokens' => TRUE,
-        '#destination__title' => $this->t('E-mail addresses'),
+        '#destination__title' => $this->t('Email addresses'),
         '#destination__description' => NULL,
         '#destination__placeholder' => implode(', ', $destination_placeholde_emails),
 
@@ -1173,7 +1172,7 @@ class EmailWebformHandler extends WebformHandlerBase implements WebformHandlerMe
   }
 
   /**
-   * AJAX callback.
+   * Ajax callback.
    *
    * @param array $form
    *   An associative array containing the structure of the form.

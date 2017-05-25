@@ -124,10 +124,8 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
    *   The token manager.
    * @param \Drupal\webform\WebformLibrariesManagerInterface $libraries_manager
    *   The libraries manager.
-   * @param \Drupal\webform\WebformSubmissionStorageInterface $webform_submission_storage
-   *   The webform submission storage.
    */
-  public function __construct(array $configuration, $plugin_id, $plugin_definition, LoggerInterface $logger, ConfigFactoryInterface $config_factory, AccountInterface $current_user, EntityTypeManagerInterface $entity_type_manager, ElementInfoManagerInterface $element_info, WebformElementManagerInterface $element_manager, WebformTokenManagerInterface $token_manager, WebformLibrariesManagerInterface $libraries_manager, WebformSubmissionStorageInterface $webform_submission_storage) {
+  public function __construct(array $configuration, $plugin_id, $plugin_definition, LoggerInterface $logger, ConfigFactoryInterface $config_factory, AccountInterface $current_user, EntityTypeManagerInterface $entity_type_manager, ElementInfoManagerInterface $element_info, WebformElementManagerInterface $element_manager, WebformTokenManagerInterface $token_manager, WebformLibrariesManagerInterface $libraries_manager) {
     parent::__construct($configuration, $plugin_id, $plugin_definition);
     $this->logger = $logger;
     $this->configFactory = $config_factory;
@@ -137,7 +135,7 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
     $this->elementManager = $element_manager;
     $this->tokenManager = $token_manager;
     $this->librariesManager = $libraries_manager;
-    $this->submissionStorage = $webform_submission_storage;
+    $this->submissionStorage = $entity_type_manager->getStorage('webform_submission');
   }
 
   /**
@@ -155,8 +153,7 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
       $container->get('plugin.manager.element_info'),
       $container->get('plugin.manager.webform.element'),
       $container->get('webform.token_manager'),
-      $container->get('webform.libraries_manager'),
-      $container->get('entity_type.manager')->getStorage('webform_submission')
+      $container->get('webform.libraries_manager')
     );
   }
 
@@ -394,8 +391,15 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
   /**
    * {@inheritdoc}
    */
+  public function isExcluded() {
+    return $this->configFactory->get('webform.settings')->get('element.excluded_elements.' . $this->pluginDefinition['id']) ? TRUE : FALSE;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
   public function isEnabled() {
-    return \Drupal::config('webform.settings')->get('elements.excluded_types.' . $this->pluginDefinition['id']) ? FALSE : TRUE;
+    return !$this->isExcluded();
   }
 
   /**
@@ -502,7 +506,7 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
     $element['#access'] = $this->checkAccessRules($operation, $element);
 
     // Add #allowed_tags.
-    $allowed_tags = $this->configFactory->get('webform.settings')->get('elements.allowed_tags');
+    $allowed_tags = $this->configFactory->get('webform.settings')->get('element.allowed_tags');
     switch ($allowed_tags) {
       case 'admin':
         $element['#allowed_tags'] = Xss::getAdminTagList();
@@ -529,7 +533,7 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
     }
 
     // Add default description display.
-    $default_description_display = $this->configFactory->get('webform.settings')->get('elements.default_description_display');
+    $default_description_display = $this->configFactory->get('webform.settings')->get('element.default_description_display');
     if ($default_description_display && !isset($element['#description_display']) && $this->hasProperty('description_display')) {
       $element['#description_display'] = $default_description_display;
     }
@@ -552,7 +556,7 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
           $icheck_skin = strtok($element['#icheck'], '-');
         }
       }
-      elseif ($default_icheck = $this->configFactory->get('webform.settings')->get('elements.default_icheck')) {
+      elseif ($default_icheck = $this->configFactory->get('webform.settings')->get('element.default_icheck')) {
         $icheck = $default_icheck;
         $icheck_skin = strtok($default_icheck, '-');
       }
@@ -577,6 +581,13 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
     }
 
     if ($this->isInput($element)) {
+      // Set custom required error message as 'data-required-error' attribute.
+      // @see Drupal.behaviors.webformRequiredError
+      // @see webform.form.js
+      if (!empty($element['#required_error'])) {
+        $element['#attributes']['data-webform-required-error'] = $element['#required_error'];
+      }
+
       $type = $element['#type'];
 
       // Get and set the element's default #element_validate property so that
@@ -846,10 +857,17 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
     $item_function = 'format' . $type . 'Item';
     $items_function = 'format' . $type . 'Items';
     if ($this->hasMultipleValues($element)) {
+      // Return #delta which is used by tokens.
+      // @see _webform_token_get_submission_value()
+      if (isset($element['#delta']) && isset($value[$element['#delta']])) {
+        return $this->$item_function($element, $value[$element['#delta']], $options);
+      }
+
       $items = [];
       foreach ($value as $item) {
         $items[] = $this->$item_function($element, $item, $options);
       }
+
       return $this->$items_function($element, $items, $options);
     }
     else {
@@ -1623,7 +1641,7 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
       '#description' => $this->t('Contents should be visible (open) to the user.'),
       '#return_value' => TRUE,
     ];
-    $default_icheck = $this->configFactory->get('webform.settings')->get('elements.default_icheck');
+    $default_icheck = $this->configFactory->get('webform.settings')->get('element.default_icheck');
     $form['form']['icheck'] = [
       '#type' => 'select',
       '#title' => 'Enhance using iCheck',
@@ -1704,7 +1722,7 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
       '#class__description' => $this->t("Apply classes to the element's wrapper around both the field and its label. Select 'custom...' to enter custom classes."),
       '#style__description' => $this->t("Apply custom styles to the element's wrapper around both the field and its label."),
       '#attributes__description' => $this->t("Enter additional attributes to be added the element's wrapper."),
-      '#classes' => $this->configFactory->get('webform.settings')->get('elements.wrapper_classes'),
+      '#classes' => $this->configFactory->get('webform.settings')->get('element.wrapper_classes'),
     ];
     $form['element_attributes'] = [
       '#type' => 'details',
@@ -1713,7 +1731,7 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
     $form['element_attributes']['attributes'] = [
       '#type' => 'webform_element_attributes',
       '#title' => $this->t('Element'),
-      '#classes' => $this->configFactory->get('webform.settings')->get('elements.classes'),
+      '#classes' => $this->configFactory->get('webform.settings')->get('element.classes'),
     ];
 
     /* Validation */
@@ -1976,7 +1994,7 @@ class WebformElementBase extends PluginBase implements WebformElementInterface {
 
       // Skip Entity reference element 'selection_settings'.
       // @see \Drupal\webform\Plugin\WebformElement\WebformEntityReferenceTrait::form
-      // @todo Fix entity reference AJAX and move code WebformEntityReferenceTrait.
+      // @todo Fix entity reference Ajax and move code WebformEntityReferenceTrait.
       if (!empty($property_element['#tree']) && $property_name == 'selection_settings') {
         unset($element_properties[$property_name]);
         $property_element['#parents'] = ['properties', $property_name];

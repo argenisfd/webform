@@ -52,6 +52,10 @@ trait WebformEntityReferenceTrait {
    */
   public function formatHtmlItem(array $element, $value, array $options = []) {
     $entity = $this->getTargetEntity($element, $value, $options);
+    if (!$entity) {
+      return '';
+    }
+
     $format = $this->getItemFormat($element);
     switch ($format) {
       case 'raw':
@@ -79,6 +83,10 @@ trait WebformEntityReferenceTrait {
    */
   public function formatTextItem(array $element, $value, array $options = []) {
     $entity = $this->getTargetEntity($element, $value, $options);
+    if (!$entity) {
+      return '';
+    }
+
     $format = $this->getItemFormat($element);
     switch ($format) {
       case 'id':
@@ -384,7 +392,7 @@ trait WebformEntityReferenceTrait {
     }
 
     // ISSUE:
-    // The AJAX handling for @EntityReferenceSelection plugins is just broken.
+    // The Ajax handling for @EntityReferenceSelection plugins is just broken.
     //
     // WORKAROUND:
     // Implement custom #ajax that refresh the entire details element and
@@ -450,7 +458,7 @@ trait WebformEntityReferenceTrait {
       );
     }
 
-    // Disable AJAX callback that we don't need.
+    // Disable Ajax callback that we don't need.
     unset($form['entity_reference']['selection_settings']['target_bundles']['#ajax']);
     unset($form['entity_reference']['selection_settings']['sort']['field']['#ajax']);
 
@@ -521,7 +529,7 @@ trait WebformEntityReferenceTrait {
   }
 
   /**
-   * AJAX callback for entity reference details element.
+   * Ajax callback for entity reference details element.
    *
    * @param array $form
    *   An associative array containing the structure of the form.

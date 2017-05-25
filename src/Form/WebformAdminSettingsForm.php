@@ -2,6 +2,7 @@
 
 namespace Drupal\webform\Form;
 
+use Drupal\Component\Plugin\PluginManagerInterface;
 use Drupal\Component\Render\FormattableMarkup;
 use Drupal\Component\Utility\NestedArray;
 use Drupal\Component\Utility\Xss;
@@ -10,13 +11,18 @@ use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Form\ConfigFormBase;
 use Drupal\Core\Form\FormState;
 use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Render\Element;
 use Drupal\file\Plugin\Field\FieldType\FileItem;
 use Drupal\webform\Entity\Webform;
 use Drupal\webform\Utility\WebformArrayHelper;
+use Drupal\webform\WebformAddonsManagerInterface;
 use Drupal\webform\WebformElementManagerInterface;
+use Drupal\webform\WebformExporterManagerInterface;
+use Drupal\webform\WebformHandlerManagerInterface;
 use Drupal\webform\WebformLibrariesManagerInterface;
 use Drupal\webform\WebformSubmissionExporterInterface;
 use Drupal\webform\WebformTokenManagerInterface;
+use Drupal\webform\WebformThirdPartySettingsManagerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
 /**
@@ -37,6 +43,20 @@ class WebformAdminSettingsForm extends ConfigFormBase {
    * @var \Drupal\webform\WebformElementManagerInterface
    */
   protected $elementManager;
+
+  /**
+   * The webform handler manager.
+   *
+   * @var \Drupal\webform\WebformHandlerManagerInterface
+   */
+  protected $handlerManager;
+
+  /**
+   * The webform exporter manager.
+   *
+   * @var \Drupal\webform\WebformExporterManagerInterface
+   */
+  protected $exporterManager;
 
   /**
    * The webform submission exporter.
@@ -60,11 +80,25 @@ class WebformAdminSettingsForm extends ConfigFormBase {
   protected $librariesManager;
 
   /**
+   * The webform third party settings manager.
+   *
+   * @var \Drupal\webform\WebformThirdPartySettingsManagerInterface
+   */
+  protected $thirdPartySettingsManager;
+
+  /**
+   * Add-ons manager.
+   *
+   * @var \Drupal\webform\WebformAddonsManagerInterface
+   */
+  protected $addonsManager;
+
+  /**
    * An array of element types.
    *
    * @var array
    */
-  protected $elementTypes;
+  protected $elementIds;
 
   /**
    * {@inheritdoc}
@@ -85,24 +119,36 @@ class WebformAdminSettingsForm extends ConfigFormBase {
    *
    * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
    *   The factory for configuration objects.
-   * @param \Drupal\Core\Extension\ModuleHandlerInterface $third_party_settings_manager
+   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
    *   The module handler.
    * @param \Drupal\webform\WebformElementManagerInterface $element_manager
    *   The webform element manager.
+   * @param \Drupal\webform\WebformHandlerManagerInterface $handler_manager
+   *   The webform handler manager.
+   * @param \Drupal\webform\WebformExporterManagerInterface $exporter_manager
+   *   The webform exporter manager.
    * @param \Drupal\webform\WebformSubmissionExporterInterface $submission_exporter
    *   The webform submission exporter.
    * @param \Drupal\webform\WebformTokenManagerInterface $token_manager
    *   The token manager.
    * @param \Drupal\webform\WebformLibrariesManagerInterface $libraries_manager
    *   The libraries manager.
+   * @param \Drupal\webform\WebformThirdPartySettingsManagerInterface $third_party_settings_manager
+   *   The webform third party settings manager.
+   * @param \Drupal\webform\WebformAddonsManagerInterface $addons_manager
+   *   The add-ons manager.
    */
-  public function __construct(ConfigFactoryInterface $config_factory, ModuleHandlerInterface $third_party_settings_manager, WebformElementManagerInterface $element_manager, WebformSubmissionExporterInterface $submission_exporter, WebformTokenManagerInterface $token_manager, WebformLibrariesManagerInterface $libraries_manager) {
+  public function __construct(ConfigFactoryInterface $config_factory, ModuleHandlerInterface $module_handler, WebformElementManagerInterface $element_manager, WebformHandlerManagerInterface $handler_manager, WebformExporterManagerInterface $exporter_manager, WebformSubmissionExporterInterface $submission_exporter, WebformTokenManagerInterface $token_manager, WebformLibrariesManagerInterface $libraries_manager, WebformThirdPartySettingsManagerInterface $third_party_settings_manager, WebformAddonsManagerInterface $addons_manager) {
     parent::__construct($config_factory);
-    $this->moduleHandler = $third_party_settings_manager;
+    $this->moduleHandler = $module_handler;
     $this->elementManager = $element_manager;
+    $this->handlerManager = $handler_manager;
+    $this->exporterManager = $exporter_manager;
     $this->submissionExporter = $submission_exporter;
     $this->tokenManager = $token_manager;
     $this->librariesManager = $libraries_manager;
+    $this->thirdPartySettingsManager = $third_party_settings_manager;
+    $this->addonsManager = $addons_manager;
   }
 
   /**
@@ -113,9 +159,13 @@ class WebformAdminSettingsForm extends ConfigFormBase {
       $container->get('config.factory'),
       $container->get('module_handler'),
       $container->get('plugin.manager.webform.element'),
+      $container->get('plugin.manager.webform.handler'),
+      $container->get('plugin.manager.webform.exporter'),
       $container->get('webform_submission.exporter'),
       $container->get('webform.token_manager'),
-      $container->get('webform.libraries_manager')
+      $container->get('webform.libraries_manager'),
+      $container->get('webform.third_party_settings_manager'),
+      $container->get('webform.addons_manager')
     );
   }
 
@@ -125,7 +175,6 @@ class WebformAdminSettingsForm extends ConfigFormBase {
   public function buildForm(array $form, FormStateInterface $form_state) {
     $config = $this->config('webform.settings');
     $settings = $config->get('settings');
-    $element_plugins = $this->elementManager->getInstances();
 
     // Page.
     $form['page'] = [
@@ -170,12 +219,12 @@ class WebformAdminSettingsForm extends ConfigFormBase {
       '#required' => TRUE,
       '#default_value' => $config->get('settings.default_form_confidential_message'),
     ];
-    $form['form']['default_form_submit_label'] = [
+    $form['form']['default_submit_button_label'] = [
       '#type' => 'textfield',
       '#title' => $this->t('Default submit button label'),
       '#required' => TRUE,
       '#size' => 20,
-      '#default_value' => $settings['default_form_submit_label'],
+      '#default_value' => $settings['default_submit_button_label'],
     ];
     $form['form']['form_classes'] = [
       '#type' => 'webform_codemirror',
@@ -420,13 +469,13 @@ class WebformAdminSettingsForm extends ConfigFormBase {
       '#default_value' => $config->get('assets.javascript'),
     ];
 
-    // Elements.
-    $form['elements'] = [
+    // Element.
+    $form['element'] = [
       '#type' => 'details',
       '#title' => $this->t('Element default settings'),
       '#tree' => TRUE,
     ];
-    $form['elements']['allowed_tags'] = [
+    $form['element']['allowed_tags'] = [
       '#type' => 'webform_radios_other',
       '#title' => $this->t('Allowed tags'),
       '#options' => [
@@ -439,23 +488,23 @@ class WebformAdminSettingsForm extends ConfigFormBase {
       '#other__maxlength' => 1000,
       '#required' => TRUE,
       '#description' => $this->t('Allowed tags are applied to any element property that may contain HTML markup. This properties include #title, #description, #field_prefix, and #field_suffix'),
-      '#default_value' => $config->get('elements.allowed_tags'),
+      '#default_value' => $config->get('element.allowed_tags'),
     ];
-    $form['elements']['wrapper_classes'] = [
+    $form['element']['wrapper_classes'] = [
       '#type' => 'webform_codemirror',
       '#title' => $this->t('Wrapper CSS classes'),
       '#description' => $this->t('A list of classes that will be provided in the "Wrapper CSS classes" dropdown. Enter one or more classes on each line. These styles should be available in your theme\'s CSS file.'),
       '#required' => TRUE,
-      '#default_value' => $config->get('elements.wrapper_classes'),
+      '#default_value' => $config->get('element.wrapper_classes'),
     ];
-    $form['elements']['classes'] = [
+    $form['element']['classes'] = [
       '#type' => 'webform_codemirror',
       '#title' => $this->t('Element CSS classes'),
       '#description' => $this->t('A list of classes that will be provided in the "Element CSS classes" dropdown. Enter one or more classes on each line. These styles should be available in your theme\'s CSS file.'),
       '#required' => TRUE,
-      '#default_value' => $config->get('elements.classes'),
+      '#default_value' => $config->get('element.classes'),
     ];
-    $form['elements']['default_description_display'] = [
+    $form['element']['default_description_display'] = [
       '#type' => 'select',
       '#title' => $this->t('Default description display'),
       '#options' => [
@@ -466,9 +515,9 @@ class WebformAdminSettingsForm extends ConfigFormBase {
         'tooltip' => $this->t('Tooltip'),
       ],
       '#description' => $this->t('Determines the default placement of the description for all webform elements.'),
-      '#default_value' => $config->get('elements.default_description_display'),
+      '#default_value' => $config->get('element.default_description_display'),
     ];
-    $form['elements']['default_icheck'] = [
+    $form['element']['default_icheck'] = [
       '#type' => 'select',
       '#title' => $this->t('Enhance checkboxes/radio buttons using iCheck'),
       '#description' => $this->t('Replaces checkboxes/radio buttons with jQuery <a href=":href">iCheck</a> boxes.', [':href' => 'http://icheck.fronteed.com/']),
@@ -511,43 +560,27 @@ class WebformAdminSettingsForm extends ConfigFormBase {
           'flat-aero' => $this->t('Flat: Aero'),
         ],
       ],
-      '#default_value' => $config->get('elements.default_icheck'),
+      '#default_value' => $config->get('element.default_icheck'),
       '#access' => $this->librariesManager->isIncluded('jquery.icheck'),
     ];
-    $form['elements']['default_google_maps_api_key'] = [
+    $form['element']['default_google_maps_api_key'] = [
       '#type' => 'textfield',
       '#title' => $this->t('Google Maps API key'),
       '#description' => $this->t('Google requires users to use a valid API key. Using the <a href="https://console.developers.google.com/apis">Google API Manager</a>, you can enable the <em>Google Maps JavaScript API</em>. That will create (or reuse) a <em>Browser key</em> which you can paste here.'),
-      '#default_value' => $config->get('elements.default_google_maps_api_key'),
+      '#default_value' => $config->get('element.default_google_maps_api_key'),
       '#access' => $this->librariesManager->isIncluded('jquery.geocomplete'),
     ];
 
     // (Excluded) Types.
-    $types_header = [
-      'title' => ['data' => $this->t('Title')],
-      'type' => ['data' => $this->t('Type')],
-    ];
-    $this->elementTypes = [];
-    $types_options = [];
-    foreach ($element_plugins as $element_id => $element_plugin) {
-      $this->elementTypes[$element_id] = $element_id;
-      $types_options[$element_id] = [
-        'title' => $element_plugin->getPluginLabel(),
-        'type' => $element_plugin->getTypeName(),
-      ];
-    }
     $form['types'] = [
       '#type' => 'details',
       '#title' => $this->t('Element types'),
       '#description' => $this->t('Select available element types'),
     ];
-    $form['types']['excluded_types'] = [
-      '#type' => 'tableselect',
-      '#header' => $types_header,
-      '#options' => $types_options,
-      '#required' => TRUE,
-      '#default_value' => array_diff($this->elementTypes, $config->get('elements.excluded_types')),
-    ];
+    $form['types']['excluded_elements'] = $this->buildExcludedPlugins(
+      $this->elementManager,
+      $config->get('element.excluded_elements')
+    );
 
     // File.
     $form['file'] = [
@@ -559,7 +592,7 @@ class WebformAdminSettingsForm extends ConfigFormBase {
       '#type' => 'checkbox',
       '#title' => $this->t('Allow files to be uploaded to public file system.'),
       '#description' => $this->t('Public files upload destination is dangerous for webforms that are available to anonymous and/or untrusted users.') . ' ' .
-      $this->t('For more information see: <a href="@href">DRUPAL-PSA-2016-003</a>', ['@href' => 'https://www.drupal.org/psa-2016-003']),
+      $this->t('For more information see: <a href=":href">DRUPAL-PSA-2016-003</a>', [':href' => 'https://www.drupal.org/psa-2016-003']),
       '#return_value' => TRUE,
       '#default_value' => $config->get('file.file_public'),
     ];
@@ -596,6 +629,7 @@ class WebformAdminSettingsForm extends ConfigFormBase {
       '#title' => $this->t('Format default settings'),
       '#tree' => TRUE,
     ];
+    $element_plugins = $this->elementManager->getInstances();
     foreach ($element_plugins as $element_id => $element_plugin) {
       // Element.
       $element_plugin_definition = $element_plugin->getPluginDefinition();
@@ -641,6 +675,32 @@ class WebformAdminSettingsForm extends ConfigFormBase {
       }
     }
 
+    // (Excluded) Handlers.
+    $form['handler'] = [
+      '#type' => 'details',
+      '#title' => $this->t('Submission handlers'),
+      '#description' => $this->t('Select available submission handlers'),
+    ];
+    $form['handler']['excluded_handlers'] = $this->buildExcludedPlugins(
+      $this->handlerManager,
+      $config->get('handler.excluded_handlers')
+    );
+    $excluded_handler_checkboxes = [];
+    foreach ($form['handler']['excluded_handlers']['#options'] as $handler_id => $option) {
+      if ($excluded_handler_checkboxes) {
+        $excluded_handler_checkboxes[] = 'or';
+      }
+      $excluded_handler_checkboxes[] = [':input[name="excluded_handlers[' . $handler_id . ']"]' => ['checked' => FALSE]];
+    }
+    $form['handler']['excluded_handlers_message'] = [
+      '#type' => 'webform_message',
+      '#message_message' => $this->t('All excluded handlers must be manually removed from existing webforms.'),
+      '#message_type' => 'warning',
+      '#states' => [
+        'visible' => $excluded_handler_checkboxes,
+      ],
+    ];
+
     // Mail.
     $form['mail'] = [
       '#type' => 'details',
@@ -657,7 +717,7 @@ class WebformAdminSettingsForm extends ConfigFormBase {
     $form['mail']['default_from_mail'] = [
       '#type' => 'textfield',
       '#title' => $this->t('Default from email'),
-      '#description' => $this->t('The default sender address for emailed webform results; often the e-mail address of the maintainer of your forms.'),
+      '#description' => $this->t('The default sender address for emailed webform results; often the email address of the maintainer of your forms.'),
       '#required' => TRUE,
       '#default_value' => $config->get('mail.default_from_mail'),
     ];
@@ -713,6 +773,17 @@ class WebformAdminSettingsForm extends ConfigFormBase {
     $export_form_state = new FormState();
     $this->submissionExporter->buildExportOptionsForm($form, $export_form_state, $export_options);
 
+    // (Excluded) Exporters.
+    $form['exporters'] = [
+      '#type' => 'details',
+      '#title' => $this->t('Submission exporters'),
+      '#description' => $this->t('Select available submission exporters'),
+    ];
+    $form['exporters']['excluded_exporters'] = $this->buildExcludedPlugins(
+      $this->exporterManager,
+      $config->get('export.excluded_exporters') ?: [] ?: []
+    );
+
     // Batch.
     $form['batch'] = [
       '#type' => 'details',
@@ -741,16 +812,16 @@ class WebformAdminSettingsForm extends ConfigFormBase {
       '#default_value' => $config->get('batch.default_batch_delete_size'),
     ];
 
-    $form['purge_settings'] = [
+    $form['purge'] = [
       '#type' => 'details',
       '#title' => $this->t('Automated purging settings'),
       '#tree' => TRUE,
     ];
-    $form['purge_settings']['cron_size'] = [
+    $form['purge']['cron_size'] = [
       '#type' => 'number',
       '#title' => $this->t('Amount of submissions to process'),
       '#min' => 1,
-      '#default_value' => $config->get('purge_settings.cron_size'),
+      '#default_value' => $config->get('purge.cron_size'),
       '#description' => $this->t('Amount of submissions to purge during single cron run. You may want to lower this number if you are facing memory or timeout issues when purging via cron.'),
     ];
 
@@ -929,6 +1000,36 @@ class WebformAdminSettingsForm extends ConfigFormBase {
       ],
     ];
 
+    // Third party settings.
+    $form['third_party_settings'] = [
+      '#type' => 'details',
+      '#title' => $this->t('Third party settings'),
+      '#description' => $this->t('Third party settings allow contrib and custom modules to define global settings that are applied to all webforms and submissions.'),
+      '#tree' => TRUE,
+    ];
+    $this->thirdPartySettingsManager->alter('webform_admin_third_party_settings_form', $form, $form_state);
+    if (!Element::children($form['third_party_settings'])) {
+      $form['third_party_settings']['message'] = [
+        '#type' => 'webform_message',
+        '#message_message' => $this->t('There are no third party settings available. Please install a contributed module that integrates with the Webform module.'),
+        '#message_type' => 'info',
+      ];
+      $form['third_party_settings']['supported'] = [
+        'title' => [
+          '#markup' => $this->t('Supported modules'),
+          '#prefix' => '<h3>',
+          '#suffix' => '</h3>',
+        ],
+        'modules' => [
+          '#theme' => 'admin_block_content',
+          '#content' => $this->addonsManager->getThirdPartySettings(),
+        ],
+      ];
+    }
+    else {
+      ksort($form['third_party_settings']);
+    }
+
     $form['token_tree_link'] = $this->tokenManager->buildTreeLink();
 
     return parent::buildForm($form, $form_state);
@@ -975,25 +1076,27 @@ class WebformAdminSettingsForm extends ConfigFormBase {
 
     /* Excluded types */
 
-    // Convert list of included types to excluded types.
-    $excluded_types = array_diff($this->elementTypes, array_filter($form_state->getValue('excluded_types')));
-    ksort($excluded_types);
+    // Convert list of included elements, handlers, exporters to excluded.
+    $excluded_elements = $this->convertIncludedToExcludedPluginIds($this->elementManager, $form_state->getValue('excluded_elements'));
+    $excluded_handlers = $this->convertIncludedToExcludedPluginIds($this->handlerManager, $form_state->getValue('excluded_handlers'));
+    $excluded_exporters = $this->convertIncludedToExcludedPluginIds($this->exporterManager, $form_state->getValue('excluded_exporters'));
 
     /* Config save */
-
     $config = $this->config('webform.settings');
     $config->set('settings', $settings);
     $config->set('assets', $form_state->getValue('assets'));
-    $config->set('elements', $form_state->getValue('elements') + ['excluded_types' => $excluded_types]);
+    $config->set('element', $form_state->getValue('element') + ['excluded_elements' => $excluded_elements]);
     $config->set('file', $form_state->getValue('file'));
     $config->set('format', $format);
+    $config->set('handler', ['excluded_handlers' => $excluded_handlers]);
     $config->set('mail', $form_state->getValue('mail'));
-    $config->set('export', $this->submissionExporter->getValuesFromInput($form_state->getValues()));
+    $config->set('export', $this->submissionExporter->getValuesFromInput($form_state->getValues()) + ['excluded_exporters' => $excluded_exporters]);
     $config->set('batch', $form_state->getValue('batch'));
-    $config->set('purge_settings', $form_state->getValue('purge_settings'));
+    $config->set('purge', $form_state->getValue('purge'));
     $config->set('test', $form_state->getValue('test'));
     $config->set('ui', $form_state->getValue('ui'));
     $config->set('libraries', $libraries);
+    $config->set('third_party_settings', $form_state->getValue('third_party_settings') ?: []);
     $config->save();
 
     /* Update paths */
@@ -1031,6 +1134,78 @@ class WebformAdminSettingsForm extends ConfigFormBase {
     if (class_exists('\Drupal\file\Plugin\Field\FieldType\FileItem')) {
       FileItem::validateMaxFilesize($element, $form_state);
     }
+  }
+
+  /****************************************************************************/
+  // Exclude plugins
+  /****************************************************************************/
+
+  /**
+   * Build excluded plugins element.
+   *
+   * @param \Drupal\Component\Plugin\PluginManagerInterface $plugin_manager
+   *   A webform element, handler, or exporter plugin manager.
+   * @param array $excluded_ids
+   *   An array of excluded ids.
+   *
+   * @return array
+   *   A table select element used to excluded plugins by id.
+   */
+  protected function buildExcludedPlugins(PluginManagerInterface $plugin_manager, array $excluded_ids) {
+    $plugins = $plugin_manager->getDefinitions();
+    $plugins = $plugin_manager->getSortedDefinitions($plugins);
+
+    $header = [
+      'title' => ['data' => $this->t('Title')],
+      'id' => ['data' => $this->t('Name'), 'class' => [RESPONSIVE_PRIORITY_LOW]],
+      'description' => ['data' => $this->t('Description'), 'class' => [RESPONSIVE_PRIORITY_LOW]],
+    ];
+
+    $ids = [];
+    $options = [];
+    foreach ($plugins as $id => $plugin_definition) {
+      $ids[$id] = $id;
+      $options[$id] = [
+        'title' => $plugin_definition['label'],
+        'id' => $plugin_definition['id'],
+        'description' => $plugin_definition['description'],
+      ];
+    }
+
+    return [
+      '#type' => 'tableselect',
+      '#header' => $header,
+      '#options' => $options,
+      '#required' => TRUE,
+      '#default_value' => array_diff($ids, $excluded_ids),
+    ];
+  }
+
+  /**
+   * Convert included ids returned from table select element to excluded ids.
+   *
+   * @param \Drupal\Component\Plugin\PluginManagerInterface $plugin_manager
+   *   A webform element, handler, or exporter plugin manager.
+   * @param array $included_ids
+   *   An array of included_ids.
+   *
+   * @return array
+   *   An array of excluded ids.
+   *
+   * @see \Drupal\webform\Form\WebformAdminSettingsForm::buildExcludedPlugins
+   */
+  protected function convertIncludedToExcludedPluginIds(PluginManagerInterface $plugin_manager, array $included_ids) {
+    $plugins = $plugin_manager->getDefinitions();
+    $plugins = $plugin_manager->getSortedDefinitions($plugins);
+
+    $ids = [];
+    foreach ($plugins as $id => $plugin) {
+      $ids[$id] = $id;
+    }
+
+    $excluded_ids = array_diff($ids, array_filter($included_ids));
+    ksort($excluded_ids);
+    return $excluded_ids;
   }
 
 }

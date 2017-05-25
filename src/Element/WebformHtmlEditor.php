@@ -44,7 +44,7 @@ class WebformHtmlEditor extends Textarea {
 
       $element['#attached']['library'][] = 'webform/webform.element.html_editor';
 
-      $element['#attached']['drupalSettings']['webform']['html_editor']['allowedContent'] = self::getAllowedContent();
+      $element['#attached']['drupalSettings']['webform']['html_editor']['allowedContent'] = static::getAllowedContent();
 
       /** @var \Drupal\webform\WebformLibrariesManagerInterface $libaries_manager */
       $base_path = base_path();
@@ -87,7 +87,7 @@ class WebformHtmlEditor extends Textarea {
    *   Allowed content (tags) for CKEditor.
    */
   public static function getAllowedContent() {
-    $allowed_tags = \Drupal::config('webform.settings')->get('elements.allowed_tags');
+    $allowed_tags = \Drupal::config('webform.settings')->get('element.allowed_tags');
     switch ($allowed_tags) {
       case 'admin':
         $allowed_tags = Xss::getAdminTagList();
